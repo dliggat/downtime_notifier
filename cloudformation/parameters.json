@@ -1,0 +1,32 @@
+[
+  {
+    "ParameterValue": "rate(5 minutes)",
+    "UsePreviousValue": false,
+    "ParameterKey": "ScheduleExpression"
+  },
+  {
+    "ParameterValue": "300",
+    "UsePreviousValue": false,
+    "ParameterKey": "Timeout"
+  },
+  {
+    "ParameterValue": "256",
+    "UsePreviousValue": false,
+    "ParameterKey": "MemorySize"
+  },
+  {
+    "ParameterValue": "downtime-notifier",
+    "UsePreviousValue": false,
+    "ParameterKey": "ProjectName"
+  },
+  {
+    "ParameterValue": "development",
+    "UsePreviousValue": false,
+    "ParameterKey": "EnvironmentName"
+  },
+  {
+    "ParameterValue": "Downtime Notifier",
+    "UsePreviousValue": false,
+    "ParameterKey": "SnsDisplayName"
+  }
+]

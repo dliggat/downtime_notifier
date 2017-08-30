@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: A stack for a website downtime notifier.
+
+
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Description: How often to invoke the function (e.g. 'rate(24 hours)'), or empty string to skip creating a AWS::Events::Rule
+
+  Timeout:
+    Type: Number
+    Description: Timeout for the function in seconds
+
+  MemorySize:
+    Type: Number
+    Description: Memory for the function in MB
+
+  ProjectName:
+    Type: String
+
+  EnvironmentName:
+    Type: String
+
+  SnsDisplayName:
+    Type: String
+
+Resources:
+
+  # The function itself.
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: [ LambdaFunctionExecutionRole ]
+    Properties:
+      Code:
+        ZipFile:
+          "Fn::Join":
+            - "\n"
+            - - "def handler(event, context):"
+              - "    print('This is a no-op; will be overwritten later.')"
+      Role: { "Fn::GetAtt": [ LambdaFunctionExecutionRole, Arn ] }
+      Timeout: { Ref: Timeout }
+      Handler: index.handler
+      Runtime: python2.7
+      MemorySize: { Ref: Timeout }
+      Environment:
+        Variables:
+          ENV: { Ref: EnvironmentName }
+
+
+  # The IAM role that the lambda function will execute under.
+  LambdaFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ lambda.amazonaws.com ]
+            Action:
+              - sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS:
+                - "Fn::Join":
+                  - ""
+                  - - "arn:aws:iam::"
+                    - { Ref: "AWS::AccountId" }
+                    - ":"
+                    - "root"
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: WriteLogsToCloudWatch
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+        - PolicyName: DescribeSGsForAccountId
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ec2:DescribeSecurityGroups"
+                Resource: "*"
+        - PolicyName: PublishToSNSTopic
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ "sns:Publish" ]
+                Resource: { Ref : NotificationTopic }
+        - PolicyName: ReadWriteDynamoResultTable
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource:
+                  "Fn::Join":
+                    - ":"
+                    - - "arn"
+                      - "aws"
+                      - "dynamodb"
+                      - { "Ref": "AWS::Region" }
+                      - { "Ref" : "AWS::AccountId" }
+                      - "Fn::Join":
+                        - "/"
+                        - - "table"
+                          - { "Ref" : "ResultTable" }
+        - PolicyName: "ParameterStore"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Id: "AllowParameterAccess"
+            Statement:
+
+              - Sid: "AllowUnencryptedParameters"
+                Effect: "Allow"
+                Action: "ssm:GetParameter"
+                Resource:
+                  - "Fn::Sub": "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/shared.*"
+                  - "Fn::Sub": "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentName}.*"
+                  - "Fn::Sub": "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}.shared.*"
+                  - "Fn::Sub": "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}.${EnvironmentName}.*"
+
+              - Sid: "AllowEncryptedParameters"
+                Effect: "Allow"
+                Action: "kms:Decrypt"
+                Resource:
+                  - Fn::ImportValue:
+                      "Fn::Sub": "kms:key:shared:arn"
+                  - Fn::ImportValue:
+                      "Fn::Sub": "kms:key:${EnvironmentName}:arn"
+                  - Fn::ImportValue:
+                      "Fn::Sub": "kms:key:${ProjectName}:arn"
+                  - Fn::ImportValue:
+                      "Fn::Sub": "kms:key:${ProjectName}-${EnvironmentName}:arn"
+
+      # Unused.
+      # ManagedPolicyArns:
+      #   - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+
+
+  # Permits the events service to invoke the service.
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      SourceArn:
+        "Fn::GetAtt": [ ScheduledRule, Arn ]
+      FunctionName: { "Fn::GetAtt": [ LambdaFunction, Arn ] }
+      Principal: events.amazonaws.com
+
+
+  # The cron rule for the execution.
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: ScheduledRule for the LambdaFunction
+      ScheduleExpression: { Ref : ScheduleExpression }
+      State: ENABLED
+      Targets:
+        - Arn: { "Fn::GetAtt": [ LambdaFunction, Arn ] }
+          Id: ScheduledRule
+
+
+  # The SNS topic to publish events to.
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: { Ref: SnsDisplayName }
+
+
+  # DynamoDB table for caching results.
+  ResultTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: TargetId
+          AttributeType: S
+        - AttributeName: Timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: TargetId
+          KeyType: HASH
+        - AttributeName: Timestamp
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 10
+        WriteCapacityUnits: 10
+
+Outputs:
+  LambdaFunction:
+    Value: { Ref : LambdaFunction }
+  LambdaFunctionARN:
+    Value: { "Fn::GetAtt": [ LambdaFunction, Arn ] }
+  LambdaFunctionExecutionRole:
+    Value: { Ref : LambdaFunctionExecutionRole }
+  LambdaFunctionExecutionRoleARN:
+    Value: { "Fn::GetAtt": [ LambdaFunctionExecutionRole, Arn ] }
+  DynamoTable:
+    Value: { Ref : ResultTable }
+  SnsTopic:
+    Value: { Ref : NotificationTopic }
+  SigninUrl:
+    Value:
+      "Fn::Sub": |
+        https://signin.aws.amazon.com/switchrole?account=${AWS::AccountId}&roleName=${LambdaFunctionExecutionRole}&displayName=assumed-role
+  TestCommand:
+    Value:
+      "Fn::Sub": |
+        aws lambda invoke --function-name ${LambdaFunction} /tmp/${LambdaFunction}-output.txt; cat /tmp/${LambdaFunction}-output.txt

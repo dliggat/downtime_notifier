@@ -1,0 +1,25 @@
+# Static configuration.
+state_changed_prefix: State Change Detected!
+downtime_detected_prefix: Downtime Detected!
+
+sites:
+  - url: https://www.google.ca
+    name: Google
+  - url: http://google.ca
+    name: Google (www redirect)
+    expected_code: 301
+  - url: https://news.google.com/news/headlines?ned=us&hl=en
+    name: Google News
+    expected_text: Top Stories
+
+
+# ParameterStore configuration that's common to all my projects.
+parameterstore_greeting: shared.preferred_greeting
+
+
+# ParameterStore configuration that's environment specific (and happens to be encrypted).
+parameterstore_topic_arn: $ENV.topic_arn
+
+
+# ParameterStore configuration that's project and environment specific.
+parameterstore_dynamo_table: downtime-notifier.$ENV.dynamo_table
